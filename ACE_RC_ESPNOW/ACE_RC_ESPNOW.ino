@@ -19,7 +19,7 @@
 #define PRINTTXPACKETS 1
 
 #define PINGMODE 1
-#define CONTROLLER 0 // 0 - Controllee, 1 = Controller
+#define CONTROLLER 1 // 0 - Controllee, 1 = Controller
 
 // AP SSID
 const char *SSID = "ACE-Controller";
@@ -102,10 +102,14 @@ void deletePeer() {
 }
 
 // send data
-void sendData(const uint8_t * data) {
+void sendData(const uint8_t * data, int length) {
   const uint8_t *peer_addr = peer.peer_addr;
-  Serial.print("Sending: "); Serial.println(*data);
-  esp_err_t result = esp_now_send(peer_addr, data, sizeof(data));
+
+  Serial.print("Sending: "); 
+  Serial.println((char*)data);
+  Serial.println("testpoint 1");
+  esp_err_t result = esp_now_send(peer_addr, data, sizeof(data) * length);
+  Serial.println("testpoint 2");
   Serial.print("Send Status: ");
   if (result == ESP_OK) {
     Serial.println("Success");
@@ -139,7 +143,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
   // In pingmode send received data back for data Validation
   if (!CONTROLLER && PINGMODE)
   {
-    sendData(data);
+    sendData(data, data_len);
   }else if (CONTROLLER && waiting && PINGMODE)
   {
     Serial.print(milliseconds); Serial.println(" milliseconds ping.");
@@ -172,6 +176,7 @@ uint8_t* stringToBytes(char* data, int length){
   }
   return output;
 }
+
 char* bytesToString(uint8_t* data, int length){
   char * output = "";
   for (int i = 0; i < length; i++){
@@ -179,13 +184,17 @@ char* bytesToString(uint8_t* data, int length){
   }
   return output;
 }
-uint8_t* generateRandomData(int length){
-  uint8_t * output = 0x00;
+void generateRandomData(int length){
+  uint8_t output[255];
+  Serial.print("Generated Data: ");
   for (int i = 0; i < length; i++){
-    output[i] = (uint8_t)random(0, 255);
+    int x = random(0, 255);
+    output[i] = (uint8_t)x;
+    Serial.println(x);
   }
-  return output;
+  memcpy(&sentData, &output, length);
 }
+
 void setup() {
   Serial.begin(19200);
 
@@ -224,10 +233,12 @@ void loop() {
     // Send data to device
     if (CONTROLLER && PINGMODE && !waiting) {
       // get random data
-      //sentData = generateRandomData(5);
+      int datalength = 5;
+      generateRandomData(datalength);
 
+      Serial.println((char*)sentData);
       // send data
-      //sendData(sentData);
+      sendData(sentData, datalength);
       waiting = true;
       // reset millisecond counter
       milliseconds = 0;
