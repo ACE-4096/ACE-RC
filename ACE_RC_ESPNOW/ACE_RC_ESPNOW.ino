@@ -51,7 +51,7 @@ const char *SSID = "ACE-Controller";
 // Global copy of peer
 esp_now_peer_info_t peer;
 const uint8_t ControllerAddress[] = {0x24, 0x0A, 0xC4, 0x58, 0x38, 0x58}; // 24:0A:C4:58:38:58
-const uint8_t ControlleeAddress[] = {0x24, 0x0A, 0xC4, 0x58, 0x2D, 0xB8}; // 24:0A:C4:58:2D:B8
+const uint8_t ControlleeAddress[] = {0x24, 0x0A, 0xC4, 0x58, 0x2D, 0xB8}; // TBD - changing to ESP32-CAM due to ESD damaged dev kit
 
 // Keep track of ping durations
 int milliseconds = 0;
@@ -68,6 +68,9 @@ char receivedText[255];
 int pingNum = 0;
 float lossRatiosCombined = 00.00;
 float totalPing = 00.00;
+
+int xCalOffset = 0;
+int yCalOffset = 0;
 
 // Init ESP Now with fallback
 void InitESPNow() {
@@ -168,6 +171,7 @@ bool sendData(const uint8_t * data, int length) {
     return false;
   }
 }
+
 bool driveMotor(char* input/*, int length*/){
   String data = String(input);
   int index = data.indexOf(':');
@@ -222,12 +226,11 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
       if (TESTMODE) Serial.println((char)receivedData[i]);
     }while (i < data_len && receivedData[i++] != 0x00);
     
-    while (!sendData(receivedData, i)) ;
     //Serial.print("Sent Data Length: "); Serial.println(datalength);
 
     memcpy(&receivedText, (char*)receivedData, i);
-
     driveMotor(receivedText);
+    while (!sendData(receivedData, i)) ;
 
   }else if (CONTROLLER && waiting && PINGMODE)
   {
@@ -261,9 +264,6 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
     waiting = false;
   }
 }
-
-
-
 
 void displayPing(){
   if (milliseconds < 100){
@@ -316,7 +316,6 @@ void generateRandomData(int length){
   memcpy(&sentData, output, length);
 }
 
-
 void setup() {
   Serial.begin(19200);
 
@@ -329,6 +328,21 @@ void setup() {
     pinMode(XPin, INPUT);
     pinMode(YPin, INPUT);
 
+    // Calibrate joystick offsets
+    int xval = analogRead(XPin);
+    if (xval > 2048){
+      xCalOffset -=(xval-2048);
+    }else{
+      xCalOffset +=(2048-xval);
+    }
+
+
+    int uval = analogRead(YPin);
+    if (yval > 2048){
+      yCalOffset -=(yval-2048);
+    }else{
+      yCalOffset +=(2048-yval);
+    }
     // Define outputs
     pinMode(connectionLed, OUTPUT);
     pinMode(pingLed1, OUTPUT);
@@ -392,8 +406,8 @@ void loop() {
       }else{
 
         // Convert inputs to string
-        int xval = analogRead(XPin) / (4096 / 10);
-        int yval = analogRead(YPin) / (4096 / 10);
+        int xval = (analogRead(XPin) + xCalOffset) / (2047 / 5);
+        int yval = (analogRead(YPin) + yCalOffset) / (2047 / 5);
         char data[10];
         sprintf(data, "%d:%d", xval,yval);
 
