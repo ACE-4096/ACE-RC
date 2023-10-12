@@ -15,11 +15,27 @@
 #include <esp_wifi.h> // only for esp_wifi_set_channel()
 
 #define CHANNEL 1
-#define PRINTRXPACKETS 1
-#define PRINTTXPACKETS 1
+#define PRINTRXPACKETS 0
+#define PRINTTXPACKETS 0
+#define DISPLAYSTATS 0
+
+#define TESTMODE 0
 
 #define PINGMODE 1
 #define CONTROLLER 1 // 0 - Controllee, 1 = Controller
+
+// INPUTs 
+#define XPin 34
+#define YPin 35
+
+// OUTPUTs
+#define connectionLed 32
+
+#define pingLed1 27
+#define pingLed2 26
+#define pingLed3 33
+#define pingLed4 25
+
 
 // AP SSID
 const char *SSID = "ACE-Controller";
@@ -28,12 +44,22 @@ const char *SSID = "ACE-Controller";
 esp_now_peer_info_t peer;
 const uint8_t ControllerAddress[] = {0x24, 0x0A, 0xC4, 0x58, 0x38, 0x58}; // 24:0A:C4:58:38:58
 const uint8_t ControlleeAddress[] = {0x24, 0x0A, 0xC4, 0x58, 0x2D, 0xB8}; // 24:0A:C4:58:2D:B8
+
 // Keep track of ping durations
-uint8_t milliseconds = 0;
-// ping data 
-uint8_t * sentData;
+int milliseconds = 0;
 // witing on response flag
 bool waiting = false;
+
+// ping data 
+uint8_t sentData[255];
+int datalength = 5;
+uint8_t receivedData[255];
+char receivedText[255];
+
+// statistical data variables
+int pingNum = 0;
+float lossRatiosCombined = 00.00;
+float totalPing = 00.00;
 
 // Init ESP Now with fallback
 void InitESPNow() {
@@ -102,30 +128,36 @@ void deletePeer() {
 }
 
 // send data
-void sendData(const uint8_t * data, int length) {
+bool sendData(const uint8_t * data, int length) {
   const uint8_t *peer_addr = peer.peer_addr;
-
-  Serial.print("Sending: "); 
-  Serial.println((char*)data);
-  Serial.println("testpoint 1");
+  //Serial.print("Sending: "); 
+  //Serial.println((char*)data);
+  //Serial.println("testpoint 1");
   esp_err_t result = esp_now_send(peer_addr, data, sizeof(data) * length);
-  Serial.println("testpoint 2");
-  Serial.print("Send Status: ");
+  //Serial.println("testpoint 2");
+  //Serial.print("Send Status: ");
   if (result == ESP_OK) {
-    Serial.println("Success");
+    //Serial.println("Success");
+    return true;
   } else if (result == ESP_ERR_ESPNOW_NOT_INIT) {
     // How did we get so far!!
-    Serial.println("ESPNOW not Init.");
+    //Serial.println("ESPNOW not Init.");
+    return false;
   } else if (result == ESP_ERR_ESPNOW_ARG) {
-    Serial.println("Invalid Argument");
+    //Serial.println("Invalid Argument");
+    return false;
   } else if (result == ESP_ERR_ESPNOW_INTERNAL) {
-    Serial.println("Internal Error");
+    //Serial.println("Internal Error");
+    return false;
   } else if (result == ESP_ERR_ESPNOW_NO_MEM) {
-    Serial.println("ESP_ERR_ESPNOW_NO_MEM");
+    //Serial.println("ESP_ERR_ESPNOW_NO_MEM");
+    return false;
   } else if (result == ESP_ERR_ESPNOW_NOT_FOUND) {
-    Serial.println("Peer not found.");
+    //Serial.println("Peer not found.");
+    return false;
   } else {
-    Serial.println("Not sure what happened");
+    //Serial.println("Not sure what happened");
+    return false;
   }
 }
 
@@ -135,6 +167,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
 
   snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
            mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+
+  memcpy(&receivedData, data, data_len);
+
   if (PRINTRXPACKETS){
     Serial.print("Last Packet Recv from: "); Serial.println(macStr);
     Serial.print("Last Packet Recv Data: "); Serial.println(*data);
@@ -143,18 +178,73 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
   // In pingmode send received data back for data Validation
   if (!CONTROLLER && PINGMODE)
   {
-    sendData(data, data_len);
+    Serial.print("Received Data Size: "); Serial.println(data_len); 
+    Serial.println("Received Data:");
+    int i = 0; 
+    do 
+    {
+      Serial.println(receivedData[i++]);
+    }while (i < data_len && receivedData[i] != 0x00);
+    while (!sendData(receivedData, i)) ;
   }else if (CONTROLLER && waiting && PINGMODE)
   {
-    Serial.print(milliseconds); Serial.println(" milliseconds ping.");
-    waiting = false;
-    Serial.print(*sentData); Serial.println(" - Data Sent.");
-    Serial.print(*data); Serial.println(" - Data Received.");
-    if (sentData == data){
-      Serial.println("Data Successfully Validated");
-    }else{
-      Serial.println("Data Corrupt");
+    if (!TESTMODE){
+      char output[255];
+      for (int i = 0; i < data_len; i++){
+        output[i] = (char)data[i];
+      }
+      memcpy(&receivedText, output, data_len);
+      Serial.print("Received Text: "); Serial.println((char*)receivedText);
     }
+    totalPing += milliseconds;
+    int validatedDataCount = 0;
+    //Serial.print("Send Data Size: "); Serial.println(datalength);
+    //Serial.print("Received Data Size: "); Serial.println(data_len);
+    //Serial.println("Sent byte - Received byte");
+    for (int i = 0; i < data_len && i < datalength; i++)
+    {
+      //Serial.print(sentData[i]); Serial.print(" - "); Serial.println(receivedData[i]);
+      if (sentData[i] == receivedData[i]) validatedDataCount++;
+    }
+    float lossRatio = validatedDataCount * (100.00 / datalength);
+    lossRatiosCombined += lossRatio;
+    if (DISPLAYSTATS){
+      Serial.print(milliseconds); Serial.println(" milliseconds ping.");
+      Serial.print("Data Validation: "); Serial.println(lossRatio);
+      Serial.print("AVG Success Ratio: "); Serial.println(lossRatiosCombined/pingNum);
+      Serial.print("AVG ping: "); Serial.print(totalPing/pingNum); Serial.println("");
+      Serial.print("Number of pings: "); Serial.println(pingNum);
+    }
+    waiting = false;
+  }
+}
+
+void displayPing(){
+  if (milliseconds < 100){
+    digitalWrite(pingLed1, HIGH);
+    digitalWrite(pingLed2, HIGH);
+    digitalWrite(pingLed3, HIGH);
+    digitalWrite(pingLed4, HIGH);
+  }else if (milliseconds < 200){
+    digitalWrite(pingLed1, LOW);
+    digitalWrite(pingLed2, HIGH);
+    digitalWrite(pingLed3, HIGH);
+    digitalWrite(pingLed4, HIGH);
+  }else if (milliseconds < 300){
+    digitalWrite(pingLed1, LOW);
+    digitalWrite(pingLed2, LOW);
+    digitalWrite(pingLed3, HIGH);
+    digitalWrite(pingLed4, HIGH);
+  }else if (milliseconds < 400){
+    digitalWrite(pingLed1, LOW);
+    digitalWrite(pingLed2, LOW);
+    digitalWrite(pingLed3, LOW);
+    digitalWrite(pingLed4, HIGH);
+  }else{
+    digitalWrite(pingLed1, LOW);
+    digitalWrite(pingLed2, LOW);
+    digitalWrite(pingLed3, LOW);
+    digitalWrite(pingLed4, LOW);
   }
 }
 
@@ -169,34 +259,59 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   }
 }
 
-uint8_t* stringToBytes(char* data, int length){
-  uint8_t * output = 0x00;
+uint8_t * stringToBytes(char* data, int length){
+  uint8_t output[255];
   for (int i = 0; i < length; i++){
     output[i] = (uint8_t)data[i];
   }
   return output;
 }
 
-char* bytesToString(uint8_t* data, int length){
-  char * output = "";
+char * bytesToString(uint8_t* data, int length){
+  char output[255];
   for (int i = 0; i < length; i++){
     output[i] = (char)data[i];
   }
   return output;
 }
+
 void generateRandomData(int length){
   uint8_t output[255];
-  Serial.print("Generated Data: ");
+  //Serial.print("Generated Data: ");
   for (int i = 0; i < length; i++){
     int x = random(0, 255);
     output[i] = (uint8_t)x;
-    Serial.println(x);
+    //Serial.println(x);
   }
-  memcpy(&sentData, &output, length);
+  memcpy(&sentData, output, length);
 }
+
 
 void setup() {
   Serial.begin(19200);
+
+  Serial.println("ESP Setup Started.");
+
+  if (CONTROLLER)
+  {
+    //define inputs
+    pinMode(XPin, INPUT);
+    pinMode(YPin, INPUT);
+
+    // Define outputs
+    pinMode(connectionLed, OUTPUT);
+    pinMode(pingLed1, OUTPUT);
+    pinMode(pingLed2, OUTPUT);
+    pinMode(pingLed3, OUTPUT);
+    pinMode(pingLed4, OUTPUT);
+
+    // set all leds to off
+    digitalWrite(connectionLed, LOW);
+    digitalWrite(pingLed1, LOW);
+    digitalWrite(pingLed2, LOW);
+    digitalWrite(pingLed3, LOW);
+    digitalWrite(pingLed4, LOW);
+  }
 
   //Set device in STA mode
   WiFi.mode(WIFI_STA);
@@ -221,6 +336,8 @@ void setup() {
   // Set RX & TX callbacks
   esp_now_register_send_cb(OnDataSent);
   esp_now_register_recv_cb(OnDataRecv);
+
+  Serial.println("ESP Setup Finished.");
 }
 
 void loop() {
@@ -229,26 +346,46 @@ void loop() {
   bool isPaired = pairToPeer(); 
   if (isPaired) {
 
+    if (CONTROLLER) digitalWrite(connectionLed, HIGH);
     // pair success or already paired
     // Send data to device
     if (CONTROLLER && PINGMODE && !waiting) {
       // get random data
-      int datalength = 5;
-      generateRandomData(datalength);
+      if (TESTMODE){
+        generateRandomData(datalength);
+      }else{
 
-      Serial.println((char*)sentData);
-      // send data
-      sendData(sentData, datalength);
-      waiting = true;
-      // reset millisecond counter
-      milliseconds = 0;
+        // Convert inputs to string
+        int xval = analogRead(XPin) / (4096 / 10);
+        int yval = analogRead(YPin) / (4096 / 10);
+        char data[10];
+        sprintf(data, "%d:%d", xval,yval);
+
+        datalength = sizeof(data) / sizeof(data[0]);
+        //Serial.print("Sent Data Length: "); Serial.println(datalength);
+        uint8_t output[255];
+        for (int i = 0; i < datalength; i++){
+          output[i] = (uint8_t)data[i];
+        }
+        memcpy(&sentData, output, datalength);
+      }
+      // try send data
+      if (sendData(sentData, datalength)){
+        pingNum++;
+        waiting = true;
+        // reset millisecond counter
+        milliseconds = 0;
+      }
+      
     }
   } else {
+    if (CONTROLLER) digitalWrite(connectionLed, LOW);
     // peer pair failed
     Serial.println("peer pair failed!");
   }
 
   // wait for 1 milliseconds to run the logic again
   milliseconds++;
+  displayPing();
   delay(1);
 }
