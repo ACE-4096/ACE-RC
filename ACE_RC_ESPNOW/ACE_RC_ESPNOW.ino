@@ -17,24 +17,32 @@
 #define CHANNEL 1
 #define PRINTRXPACKETS 0
 #define PRINTTXPACKETS 0
-#define DISPLAYSTATS 0
+#define DISPLAYSTATS 1
+#define DISPLAY_PWM 0
 
 #define TESTMODE 0
 
 #define PINGMODE 1
-#define CONTROLLER 1 // 0 - Controllee, 1 = Controller
+#define CONTROLLER 0 // 0 - Controllee, 1 = Controller
 
-// INPUTs 
-#define XPin 34
-#define YPin 35
+// Controller Pins
+  // INPUTs 
+  #define XPin 34
+  #define YPin 35
 
-// OUTPUTs
-#define connectionLed 32
+  // OUTPUTs
+  #define connectionLed 32
+  #define pingLed1 27
+  #define pingLed2 26
+  #define pingLed3 33
+  #define pingLed4 25
 
-#define pingLed1 27
-#define pingLed2 26
-#define pingLed3 33
-#define pingLed4 25
+// Controllee Pins
+  // INPUTs
+
+  // OUTPUTs
+  #define pwm1 18
+  #define pwm2 19
 
 
 // AP SSID
@@ -160,6 +168,32 @@ bool sendData(const uint8_t * data, int length) {
     return false;
   }
 }
+bool driveMotor(char* input/*, int length*/){
+  String data = String(input);
+  int index = data.indexOf(':');
+  if (index == -1) return false;
+  int xVal = data.substring(index,0).toInt();
+  
+  int newVal = 0;
+  if (xVal > 4){ // Forward
+    newVal = (xVal-4) * (255 / 6);
+    analogWrite(pwm1, newVal);
+    digitalWrite(pwm2, LOW);
+    if (DISPLAY_PWM) { Serial.print("PWM Pin 1: "); Serial.print(newVal);
+                        Serial.print(", PWM Pin 2: "); Serial.println("0"); }
+  }else if (xVal < 4){ // Backward
+    newVal = (4-xVal) * (255 / 4);
+    digitalWrite(pwm1, LOW);
+    analogWrite(pwm2, newVal);
+    if (DISPLAY_PWM) { Serial.print("PWM Pin 1: "); Serial.print("0");
+                        Serial.print(", PWM Pin 2: "); Serial.println(newVal); }
+  }else{
+    analogWrite(pwm1, 0);
+    analogWrite(pwm2, 0);
+    if (DISPLAY_PWM) { Serial.print("PWM Pin 1: "); Serial.print("0");
+                        Serial.print(", PWM Pin 2: "); Serial.println("0"); }
+  }
+}
 
 // callback when data is recv from Peer
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
@@ -178,14 +212,23 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
   // In pingmode send received data back for data Validation
   if (!CONTROLLER && PINGMODE)
   {
-    Serial.print("Received Data Size: "); Serial.println(data_len); 
-    Serial.println("Received Data:");
+    if(TESTMODE){
+      Serial.print("Received Data Size: "); Serial.println(data_len); 
+      Serial.println("Received Data:");
+    }
     int i = 0; 
     do 
     {
-      Serial.println(receivedData[i++]);
-    }while (i < data_len && receivedData[i] != 0x00);
+      if (TESTMODE) Serial.println((char)receivedData[i]);
+    }while (i < data_len && receivedData[i++] != 0x00);
+    
     while (!sendData(receivedData, i)) ;
+    //Serial.print("Sent Data Length: "); Serial.println(datalength);
+
+    memcpy(&receivedText, (char*)receivedData, i);
+
+    driveMotor(receivedText);
+
   }else if (CONTROLLER && waiting && PINGMODE)
   {
     if (!TESTMODE){
@@ -194,7 +237,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
         output[i] = (char)data[i];
       }
       memcpy(&receivedText, output, data_len);
-      Serial.print("Received Text: "); Serial.println((char*)receivedText);
+      //Serial.print("Received Text: "); Serial.println((char*)receivedText);
     }
     totalPing += milliseconds;
     int validatedDataCount = 0;
@@ -218,6 +261,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
     waiting = false;
   }
 }
+
+
+
 
 void displayPing(){
   if (milliseconds < 100){
@@ -259,22 +305,6 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   }
 }
 
-uint8_t * stringToBytes(char* data, int length){
-  uint8_t output[255];
-  for (int i = 0; i < length; i++){
-    output[i] = (uint8_t)data[i];
-  }
-  return output;
-}
-
-char * bytesToString(uint8_t* data, int length){
-  char output[255];
-  for (int i = 0; i < length; i++){
-    output[i] = (char)data[i];
-  }
-  return output;
-}
-
 void generateRandomData(int length){
   uint8_t output[255];
   //Serial.print("Generated Data: ");
@@ -294,6 +324,7 @@ void setup() {
 
   if (CONTROLLER)
   {
+    // CONTROLLER Pin Setup
     //define inputs
     pinMode(XPin, INPUT);
     pinMode(YPin, INPUT);
@@ -311,6 +342,11 @@ void setup() {
     digitalWrite(pingLed2, LOW);
     digitalWrite(pingLed3, LOW);
     digitalWrite(pingLed4, LOW);
+  }else{
+    // CONTROLLEE Pin Setup
+    
+    pinMode(pwm1, OUTPUT);
+    pinMode(pwm2, OUTPUT);
   }
 
   //Set device in STA mode
@@ -385,7 +421,9 @@ void loop() {
   }
 
   // wait for 1 milliseconds to run the logic again
-  milliseconds++;
-  displayPing();
+  if (CONTROLLER){
+    milliseconds++;
+    displayPing();
+  }
   delay(1);
 }
